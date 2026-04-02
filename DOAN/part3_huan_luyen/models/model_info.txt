@@ -1,0 +1,6 @@
+=== THÔNG TIN MÔ HÌNH SIGN LANGUAGE RECOGNITION ===
+Kiến trúc       : LSTM (128 → 64) + Dense (64 → 10)
+Input Shape     : (60, 126) — 60 frames, 126 features/frame
+Output Classes  : 10
+Tên các Classes : ['xin_chao', 'cam_on', 'toi', 'ban', 'yeu', 'khong', 'co', 'giup_do', 'xin_loi', 'tam_biet']
+Accuracy (Test) : 0.9268

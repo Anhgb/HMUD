@@ -1,0 +1,15 @@
+# Bỏ qua môi trường ảo (Rất nặng, không bao giờ được đưa lên Github)
+.venv/
+.venv_labelstudio/
+
+# Bỏ qua các file rác của Python
+__pycache__/
+*.pyc
+
+# Bỏ qua các tệp dataset và nén nặng gây kẹt Github
+*.zip
+*.pt
+*.npy
+*.h5
+*.pkl
+label_studio_data/
