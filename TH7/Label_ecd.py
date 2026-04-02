@@ -18,7 +18,7 @@ print("\n DataFrame sau khi mã hóa nhãn")
 print(df)
 # Chúng ta có thể xen ánh xạ giũa các nhãn gốc và nhãn đã mã hóa 
 # .classes_ thuộc tính này chứa các nhãn gốc thứ tự đã đc mã hóa
-print("\n --- Anh xạ nhãn ---")
+print("\n --- Ánh xạ nhãn ---")
 for  i, label in enumerate(label_encoder.classes_):
     print(f"Nhãn '{label}' được mã hóa thành {i}")
 # Hoặc dùng dict(zip(...)) để dễ nhìn hơn

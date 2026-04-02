@@ -1,2 +1,2 @@
-a = "haapy new year"
+a = "haapy new year 2026"
 print(a);
