@@ -422,6 +422,15 @@ class SignLanguageApp(ctk.CTk):
         )
         self.btn_stop.pack(side="right", fill="x", expand=True, padx=(4, 0))
 
+        # Nút Reset Buffer — Giúp chuyển cử chỉ sạch sẽ
+        ctk.CTkButton(
+            frame, text="⚡ Reset Buffer (Chuyển cử chỉ)",
+            font=ctk.CTkFont(size=12, weight="bold"), height=34,
+            fg_color="#1f3a5f", hover_color="#1a4a7a",
+            text_color=C["cyan"],
+            command=self._reset_buffer
+        ).pack(fill="x", padx=14, pady=(0, 6))
+
         # Nút xuất log
         ctk.CTkButton(
             frame, text="💾  Xuất Log ra File .txt",
@@ -532,6 +541,16 @@ class SignLanguageApp(ctk.CTk):
             self._log(f"💾 Đã xuất log → {os.path.basename(path)}")
         except Exception as e:
             self._log(f"[LỖI] Xuất log thất bại: {e}")
+
+    def _reset_buffer(self):
+        """Xóa trắng buffer — dùng khi muốn chuyển sang cử chỉ mới hoàn toàn."""
+        with self._lock:
+            self.buffer_seq.clear()
+        self.progress_buf.set(0)
+        self.lbl_buf_val.configure(text=f"0/{SEQUENCE_LENGTH}")
+        self.tu_cuoi_cung = None           # reset debounce cũng
+        self.thoi_gian_nhan_tu_cuoi = time.time()
+        self._log("⚡ Buffer đã reset — Sẵn sàng nhận cử chỉ mới")
 
     def _reset_stats(self):
         self.so_tu_nhan_dien = 0
@@ -652,15 +671,27 @@ class SignLanguageApp(ctk.CTk):
                     cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 0), 2, cv2.LINE_AA
                 )
 
-            # Khi buffer đầy → gọi API
+            # Kiểm tra chất lượng buffer trước khi gửi API
+            # Chỉ gửi nếu ít nhất 40% frame có dữ liệu tay (không phải zero)
             if buf_len == SEQUENCE_LENGTH:
                 with self._lock:
                     seq_copy = list(self.buffer_seq)
                     for _ in range(SEQUENCE_LENGTH // 2):
                         self.buffer_seq.popleft()
-                threading.Thread(
-                    target=self._call_api, args=(seq_copy,), daemon=True
-                ).start()
+
+                # Đếm bao nhiêu frame có tay (có ít nhất 1 giá trị != 0)
+                frame_co_tay = sum(1 for f in seq_copy if np.any(f != 0))
+                ty_le = frame_co_tay / SEQUENCE_LENGTH
+
+                if ty_le >= 0.4:  # ít nhất 40% frame có tay
+                    threading.Thread(
+                        target=self._call_api, args=(seq_copy,), daemon=True
+                    ).start()
+                else:
+                    # Không có tay đủ — hiện cảnh báo nhẹ trên UI
+                    self.after(0, self.lbl_hand_detect.configure,
+                               {"text": f"⚠️ Tay: {ty_le*100:.0f}% — Giơ tay gần hơn!",
+                                "text_color": C["orange"]})
 
             # Cập nhật UI
             img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
