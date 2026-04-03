@@ -56,6 +56,12 @@ LABEL_DISPLAY = {
     "tam_biet": "🖐️ Tạm Biệt",
 }
 
+# Hàm làm sạch nhãn nhận từ API (loại [DEMO], ký tự lạ...)
+def _clean_label(raw: str) -> str:
+    """Loại bỏ tiền tố [DEMO], khoảng trắng thừa."""
+    cleaned = re.sub(r'\[.*?\]', '', raw).strip()
+    return cleaned if cleaned else raw
+
 # Màu sắc chủ đề
 C = {
     "bg":       "#090c10",
@@ -676,22 +682,32 @@ class SignLanguageApp(ctk.CTk):
             resp = requests.post(f"{url}/predict", json=payload, timeout=3)
             if resp.status_code == 200:
                 data    = resp.json()
-                ky_hieu = data.get("ky_hieu", "?")
+                # Làm sạch nhãn: loại [DEMO] và các tag lạ
+                ky_hieu = _clean_label(data.get("ky_hieu", "?"))
                 tincay  = data.get("do_tin_cay", 0.0)
                 top3    = data.get("top3", [])
                 ms      = data.get("thoi_gian_xu_ly_ms", 0)
 
+                # Normalize label top3 cũng
+                for item in top3:
+                    item["nhan"] = _clean_label(item.get("nhan", ""))
+
                 self.after(0, self.lbl_latency.configure,
                            {"text": f"Latency: {ms:.0f}ms"})
 
-                if tincay >= nguong and ky_hieu not in ("None", "?"):
+                if tincay >= nguong and ky_hieu not in ("", "None", "?"):
                     self.ket_qua_ht = ky_hieu
                     self.tincay_ht  = tincay
 
-                    # Ghép câu (debounce 2 giây)
+                    # DEBOUNCE CHẶT HƠN:
+                    # Chỉ thêm từ nếu:
+                    #   - Từ khác hoàn toàn so với từ vừa rồi
+                    #   - HOẶC khoảng ngững > 4 giây (người dùng dừng tay, giơ lại)
                     now = time.time()
-                    if (self.tu_cuoi_cung != ky_hieu or
-                            now - self.thoi_gian_nhan_tu_cuoi > 2.0):
+                    tu_khac   = (self.tu_cuoi_cung != ky_hieu)
+                    ngung_lau = (now - self.thoi_gian_nhan_tu_cuoi > 4.0)
+
+                    if tu_khac or ngung_lau:
                         self.cau_hien_tai.append(ky_hieu)
                         self.tu_cuoi_cung = ky_hieu
                         self.thoi_gian_nhan_tu_cuoi = now
@@ -709,6 +725,7 @@ class SignLanguageApp(ctk.CTk):
                         self.after(0, self._refresh_sentence_label)
 
                     self.after(0, self._ui_update_result, ky_hieu, tincay, top3)
+
 
         except (requests.exceptions.Timeout,
                 requests.exceptions.ConnectionError):
