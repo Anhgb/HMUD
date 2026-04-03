@@ -350,14 +350,11 @@ class SignLanguageApp(ctk.CTk):
     # ========================================================
     def _bat_dau(self):
         if self.dang_chay: return
-        self.cap = cv2.VideoCapture(WEBCAM_INDEX, cv2.CAP_DSHOW) # Dùng DSHOW giúp khởi động camera Windows ổn định hơn
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, WEBCAM_W)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, WEBCAM_H)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
 
-        if not self.cap.isOpened():
-            self._ghi_lichsu("[LỖI] Không mở được camera.")
-            return
+        # Đợi luồng cũ tắt hẳn để Camera thực sự được nhả
+        if self.luong_webcam and self.luong_webcam.is_alive():
+            self.update() # Mượt UI
+            self.luong_webcam.join(timeout=2.0)
 
         self.dang_chay = True
         self.tong_frame = 0
@@ -388,6 +385,17 @@ class SignLanguageApp(ctk.CTk):
         self.destroy()
 
     def _vong_lap_webcam(self):
+        # Mở Camera bên trong luồng để không làm đơ giao diện
+        self.cap = cv2.VideoCapture(WEBCAM_INDEX, cv2.CAP_DSHOW)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, WEBCAM_W)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, WEBCAM_H)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+
+        if not self.cap.isOpened():
+            self.after(0, lambda: self._ghi_lichsu("[LỖI] Không mở được camera. Rút dây cắm lại xem sao!"))
+            self.after(0, self._dung)
+            return
+
         # MÀU NEON CHUẨN CYBERPUNK (BGR format in OpenCV)
         # Các điểm khớp Bàn tay (Cyan bàng bạc)
         landmark_style = mp_draw.DrawingSpec(color=(255, 255, 0), thickness=3, circle_radius=4)
