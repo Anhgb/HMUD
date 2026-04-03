@@ -4,24 +4,26 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='repla
 
 """
 =============================================================================
-MODULE: app_desktop.py
-MO TA: Giao dien Desktop (CustomTkinter) cho he thong nhan dang
-       ngon ngu ky hieu thoi gian thuc qua Webcam. Đã nâng cấp UI Neon & Ghép câu.
+MODULE: app_desktop.py  ·  Version 3.0 — Ultra Premium Edition
+MO TA: Giao dien Desktop cho he thong Nhan Dang Ngon Ngu Ky Hieu thoi gian thuc.
+       Tinh nang: Neon UI, Ghep Cau, TTS, Thong Ke Phien, Xuat Log, Top-5 Tu.
 =============================================================================
 """
 
 import cv2
 import time
+import datetime
 import threading
 import requests
 import numpy as np
 import mediapipe as mp
 import customtkinter as ctk
-from PIL import Image, ImageTk
-from collections import deque
+from PIL import Image
+from collections import deque, Counter
 import pyttsx3
 import queue
 import re
+import os
 
 # ============================================================
 # CAU HINH GIAO DIEN
@@ -32,91 +34,108 @@ ctk.set_default_color_theme("blue")
 # ============================================================
 # CAU HINH KY THUAT
 # ============================================================
-API_URL_DEFAULT     = "http://localhost:8000"
-SEQUENCE_LENGTH     = 60          # So frame moi sequence (phai khop luc train)
-NUM_FEATURES        = 126         # 21 landmarks x 3 toa do x 2 tay
-WEBCAM_W, WEBCAM_H  = 640, 480
-WEBCAM_INDEX        = 0
+API_URL_DEFAULT    = "http://localhost:8000"
+SEQUENCE_LENGTH    = 60
+NUM_FEATURES       = 126
+WEBCAM_W, WEBCAM_H = 640, 480
+WEBCAM_INDEX       = 0
 
-# MediaPipe
 mp_hands      = mp.solutions.hands
 mp_draw       = mp.solutions.drawing_utils
-mp_draw_style = mp.solutions.drawing_styles
 
-# Ten day du ky hieu (hien thi dep hon)
 LABEL_DISPLAY = {
-    "xin_chao":  "👋 Xin Chào",
-    "cam_on":    "🙏 Cảm Ơn",
-    "toi":       "👈 Tôi",
-    "ban":       "👉 Bạn",
-    "yeu":       "❤️ Yêu",
-    "khong":     "🚫 Không",
-    "co":        "✅ Có",
-    "giup_do":   "🤝 Giúp Đỡ",
-    "xin_loi":   "😔 Xin Lỗi",
-    "tam_biet":  "🖐️ Tạm Biệt",
+    "xin_chao": "👋 Xin Chào",
+    "cam_on":   "🙏 Cảm Ơn",
+    "toi":      "👈 Tôi",
+    "ban":      "👉 Bạn",
+    "yeu":      "❤️ Yêu",
+    "khong":    "🚫 Không",
+    "co":       "✅ Có",
+    "giup_do":  "🤝 Giúp Đỡ",
+    "xin_loi":  "😔 Xin Lỗi",
+    "tam_biet": "🖐️ Tạm Biệt",
+}
+
+# Màu sắc chủ đề
+C = {
+    "bg":       "#090c10",
+    "panel":    "#0d1117",
+    "border":   "#21262d",
+    "text":     "#e6edf3",
+    "muted":    "#8b949e",
+    "cyan":     "#00ffff",
+    "magenta":  "#ff00ff",
+    "green":    "#3fb950",
+    "orange":   "#f0883e",
+    "red":      "#da3633",
+    "header":   "#161b22",
 }
 
 
 # ============================================================
-# CLASS CHÍNH — GIAO DIỆN DESKTOP
+# CLASS CHÍNH
 # ============================================================
-
 class SignLanguageApp(ctk.CTk):
+
     def __init__(self):
         super().__init__()
 
-        # --- Cấu hình cửa sổ ---
-        self.title("🤟 Sign Language AI Assistant — Premium Edition")
-        self.geometry("1200x750")
-        self.minsize(900, 650)
-        self.configure(fg_color="#090c10")  # Màu đen nhám cực ngầu
+        self.title("🤟  Sign Language AI  ·  Ultra Premium v3.0")
+        self.geometry("1280x800")
+        self.minsize(960, 680)
+        self.configure(fg_color=C["bg"])
 
         # --- Biến trạng thái ---
-        self.dang_chay      = False
-        self.cap            = None
-        self.luong_webcam   = None
-        self.buffer_seq     = deque(maxlen=SEQUENCE_LENGTH)
-        self.ket_qua_ht     = "---"
-        self.tincay_ht      = 0.0
-        self.lich_su        = []
-        self.tong_frame     = 0
-        self.thoi_diem_bd   = None
+        self.dang_chay   = False
+        self.cap         = None
+        self.luong_webcam = None
+        self.buffer_seq  = deque(maxlen=SEQUENCE_LENGTH)
+        self.ket_qua_ht  = "---"
+        self.tincay_ht   = 0.0
+        self.tong_frame  = 0
+        self.thoi_diem_bd = None
+        self.co_tay      = False  # Đang phát hiện tay không
 
-        # --- Biến ghép câu ---
-        self.cau_hien_tai = []
-        self.tu_cuoi_cung = None
+        # --- Thống kê phiên ---
+        self.so_tu_nhan_dien   = 0
+        self.tong_do_tincay    = 0.0
+        self.dem_tu            = Counter()  # Tần suất từ
+
+        # --- Ghép câu ---
+        self.cau_hien_tai           = []
+        self.tu_cuoi_cung           = None
         self.thoi_gian_nhan_tu_cuoi = time.time()
 
-        # --- Công cụ Text-To-Speech (Nhạc nền) ---
+        # --- TTS ---
         self.audio_queue = queue.Queue()
         threading.Thread(target=self._xu_ly_am_thanh, daemon=True).start()
 
-        # --- MediaPipe detector ---
+        # --- MediaPipe ---
         self.hands_detector = mp_hands.Hands(
             max_num_hands=2,
             min_detection_confidence=0.6,
             min_tracking_confidence=0.5
         )
-
         self._lock = threading.Lock()
 
-        # --- Xây dựng UI ---
-        self._xay_dung_ui()
-        self.protocol("WM_DELETE_WINDOW", self._dong_ung_dung)
+        # --- Build UI ---
+        self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ========================================================
-    # XỬ LÝ ÂM THANH
-    # ========================================================
+        # --- Cập nhật đồng hồ ---
+        self._tick_clock()
+
+    # ====================================================
+    # TTS
+    # ====================================================
     def _xu_ly_am_thanh(self):
-        """Khởi động bộ máy phát âm thanh trong background thread."""
         try:
             import pythoncom
             pythoncom.CoInitialize()
-        except:
+        except Exception:
             pass
         engine = pyttsx3.init()
-        engine.setProperty('rate', 140)  # Tốc độ đọc tự nhiên hơn
+        engine.setProperty('rate', 145)
         while True:
             van_ban = self.audio_queue.get()
             if van_ban is None:
@@ -125,410 +144,661 @@ class SignLanguageApp(ctk.CTk):
                 engine.say(van_ban)
                 engine.runAndWait()
             except Exception as e:
-                print(f"[LỖI AUDIO] {e}")
+                print(f"[TTS ERROR] {e}")
 
-    # ========================================================
-    # XÂY DỰNG GIAO DIỆN
-    # ========================================================
-    def _xay_dung_ui(self):
-        # --- HEADER ---
-        header = ctk.CTkFrame(self, fg_color="#161b22", corner_radius=0, height=60)
-        header.pack(fill="x", padx=0, pady=0)
-        header.pack_propagate(False)
+    # ====================================================
+    # ĐỒNG HỒ PHIÊN
+    # ====================================================
+    def _tick_clock(self):
+        if self.dang_chay and self.thoi_diem_bd:
+            elapsed = int(time.time() - self.thoi_diem_bd)
+            h = elapsed // 3600
+            m = (elapsed % 3600) // 60
+            s = elapsed % 60
+            self.lbl_thoi_gian.configure(text=f"⏱ {h:02d}:{m:02d}:{s:02d}")
+        self.after(1000, self._tick_clock)
+
+    # ====================================================
+    # XÂY DỰNG UI
+    # ====================================================
+    def _build_ui(self):
+        # ─── HEADER ───────────────────────────────────────
+        hdr = ctk.CTkFrame(self, fg_color=C["header"], corner_radius=0, height=56)
+        hdr.pack(fill="x")
+        hdr.pack_propagate(False)
 
         ctk.CTkLabel(
-            header,
-            text="🤟  SIGN LANGUAGE ASSISTANT  —  Neon UI",
-            font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
-            text_color="#00ffff"  # Cyan Neon
-        ).pack(side="left", padx=20, pady=10)
+            hdr, text="🤟  SIGN LANGUAGE AI  ·  Neural Interface v3.0",
+            font=ctk.CTkFont("Segoe UI", 20, "bold"), text_color=C["cyan"]
+        ).pack(side="left", padx=20)
 
-        self.lbl_trang_thai_header = ctk.CTkLabel(
-            header, text="● Chờ khởi động", font=ctk.CTkFont(size=14), text_color="#8b949e"
+        # Đèn trạng thái bên phải header
+        self.lbl_status_hdr = ctk.CTkLabel(
+            hdr, text="⬤  Standby", font=ctk.CTkFont(size=13), text_color=C["muted"]
         )
-        self.lbl_trang_thai_header.pack(side="right", padx=20)
+        self.lbl_status_hdr.pack(side="right", padx=20)
 
-        # --- BODY ---
+        # Chỉ thị phát hiện bàn tay
+        self.lbl_hand_detect = ctk.CTkLabel(
+            hdr, text="✋ Không có tay", font=ctk.CTkFont(size=12), text_color=C["border"]
+        )
+        self.lbl_hand_detect.pack(side="right", padx=(0, 30))
+
+        # ─── BODY ─────────────────────────────────────────
         body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=15, pady=10)
+        body.pack(fill="both", expand=True, padx=12, pady=8)
 
-        col_trai = ctk.CTkFrame(body, fg_color="transparent")
-        col_trai.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        col_l = ctk.CTkFrame(body, fg_color="transparent")
+        col_l.pack(side="left", fill="both", expand=True, padx=(0, 6))
 
-        col_phai = ctk.CTkFrame(body, fg_color="transparent", width=360)
-        col_phai.pack(side="right", fill="y", padx=(8, 0))
-        col_phai.pack_propagate(False)
+        col_r = ctk.CTkFrame(body, fg_color="transparent", width=380)
+        col_r.pack(side="right", fill="y", padx=(6, 0))
+        col_r.pack_propagate(False)
 
-        self._tao_panel_webcam(col_trai)
-        
-        # Băng rôn CÂU chữ khổng lồ dưới Webcam
-        self._tao_panel_ghep_cau(col_trai)
+        self._build_webcam_panel(col_l)
+        self._build_sentence_panel(col_l)  # Băng rôn dưới webcam
+        self._build_result_panel(col_r)
+        self._build_stats_panel(col_r)
+        self._build_controls_panel(col_r)
+        self._build_topwords_panel(col_r)
 
-        self._tao_panel_ketqua(col_phai)
-        self._tao_panel_caidat(col_phai)
-        self._tao_panel_lichsu(col_phai)
+        # ─── FOOTER ───────────────────────────────────────
+        self._build_footer()
 
-        # --- FOOTER ---
-        self._tao_footer()
-
-    def _tao_panel_webcam(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color="#161b22", corner_radius=12)
-        frame.pack(fill="both", expand=True, pady=(0, 10))
+    # ─── PANEL WEBCAM ─────────────────────────────────────
+    def _build_webcam_panel(self, parent):
+        frame = ctk.CTkFrame(parent, fg_color=C["panel"], corner_radius=14)
+        frame.pack(fill="both", expand=True, pady=(0, 8))
 
         self.lbl_video = ctk.CTkLabel(
-            frame, text="Nhấn  ▶  Bắt Đầu  để mở camera",
-            font=ctk.CTkFont(size=14), text_color="#30363d", fg_color="#0d1117",
-            corner_radius=8, width=640, height=480
+            frame,
+            text="Nhấn  ▶  BẮT ĐẦU  để mở Camera",
+            font=ctk.CTkFont(size=15), text_color=C["border"],
+            fg_color="#0a0e14", corner_radius=10,
+            width=640, height=460
         )
-        self.lbl_video.pack(padx=15, pady=15, expand=True)
+        self.lbl_video.pack(padx=12, pady=12, expand=True)
 
-        buf_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        buf_frame.pack(fill="x", padx=15, pady=(0, 15))
+        # Buffer bar
+        buf_row = ctk.CTkFrame(frame, fg_color="transparent")
+        buf_row.pack(fill="x", padx=12, pady=(0, 10))
 
-        self.progress_buffer = ctk.CTkProgressBar(
-            buf_frame, mode="determinate", progress_color="#ff00ff", fg_color="#21262d", height=8
+        ctk.CTkLabel(buf_row, text="Buffer", font=ctk.CTkFont(size=11),
+                     text_color=C["muted"]).pack(side="left", padx=(0, 8))
+
+        self.progress_buf = ctk.CTkProgressBar(
+            buf_row, mode="determinate",
+            progress_color=C["magenta"], fg_color=C["border"], height=6
         )
-        self.progress_buffer.set(0)
-        self.progress_buffer.pack(side="left", fill="x", expand=True)
+        self.progress_buf.set(0)
+        self.progress_buf.pack(side="left", fill="x", expand=True)
 
-    def _tao_panel_ghep_cau(self, parent):
-        """Băng rôn lớn hiển thị câu hoàn chỉnh phía dưới camera"""
-        frame = ctk.CTkFrame(parent, fg_color="#161b22", corner_radius=12)
+        self.lbl_buf_val = ctk.CTkLabel(
+            buf_row, text="0/60", font=ctk.CTkFont(size=11),
+            text_color=C["muted"], width=45
+        )
+        self.lbl_buf_val.pack(side="left", padx=(8, 0))
+
+    # ─── PANEL GHÉP CÂU ───────────────────────────────────
+    def _build_sentence_panel(self, parent):
+        frame = ctk.CTkFrame(parent, fg_color=C["panel"], corner_radius=14)
         frame.pack(fill="x", side="bottom")
 
-        header_row = ctk.CTkFrame(frame, fg_color="transparent")
-        header_row.pack(fill="x", padx=15, pady=(10, 0))
+        top_row = ctk.CTkFrame(frame, fg_color="transparent")
+        top_row.pack(fill="x", padx=14, pady=(10, 4))
 
         ctk.CTkLabel(
-            header_row, text="💬 Câu hoàn chỉnh:", font=ctk.CTkFont(size=14, weight="bold"), text_color="#8b949e"
+            top_row, text="💬  Câu hoàn chỉnh",
+            font=ctk.CTkFont(size=13, weight="bold"), text_color=C["muted"]
         ).pack(side="left")
 
-        btn_row = ctk.CTkFrame(header_row, fg_color="transparent")
+        btn_row = ctk.CTkFrame(top_row, fg_color="transparent")
         btn_row.pack(side="right")
 
+        # Nút đọc câu
         ctk.CTkButton(
-            btn_row, text="🔊 Đọc Câu", font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color="#00ffff", hover_color="#00cccc", text_color="#000000", width=90, height=28,
-            command=self._doc_toan_bo_cau
-        ).pack(side="left", padx=(0, 10))
+            btn_row, text="🔊 Đọc", width=72, height=28,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color=C["cyan"], hover_color="#00cccc", text_color="#000",
+            command=self._read_sentence
+        ).pack(side="left", padx=(0, 6))
 
+        # Nút undo từ cuối
         ctk.CTkButton(
-            btn_row, text="❌ Xóa", font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color="#da3633", hover_color="#f85149", width=60, height=28,
-            command=self._xoa_cau
+            btn_row, text="↩ Xóa từ cuối", width=110, height=28,
+            font=ctk.CTkFont(size=12),
+            fg_color=C["border"], hover_color="#30363d", text_color=C["muted"],
+            command=self._undo_last_word
+        ).pack(side="left", padx=(0, 6))
+
+        # Nút xóa toàn bộ
+        ctk.CTkButton(
+            btn_row, text="🗑 Xóa hết", width=88, height=28,
+            font=ctk.CTkFont(size=12),
+            fg_color=C["red"], hover_color="#f85149",
+            command=self._clear_sentence
         ).pack(side="left")
 
-        self.lbl_cau_hien_tai = ctk.CTkLabel(
-            frame, text="...", font=ctk.CTkFont(size=22, weight="bold"),
-            text_color="#ffffff", wraplength=600, justify="left", anchor="w"
+        self.lbl_sentence = ctk.CTkLabel(
+            frame, text="...",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color="#ffffff", wraplength=680, justify="left", anchor="w"
         )
-        self.lbl_cau_hien_tai.pack(fill="x", padx=15, pady=(10, 15))
+        self.lbl_sentence.pack(fill="x", padx=14, pady=(4, 12))
 
-    def _tao_panel_ketqua(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color="#161b22", corner_radius=12)
-        frame.pack(fill="x", pady=(0, 8))
+    # ─── PANEL KẾT QUẢ ────────────────────────────────────
+    def _build_result_panel(self, parent):
+        frame = ctk.CTkFrame(parent, fg_color=C["panel"], corner_radius=14)
+        frame.pack(fill="x", pady=(0, 7))
 
         ctk.CTkLabel(
-            frame, text="🎯  Từ Mới Nhất", font=ctk.CTkFont(size=14, weight="bold"), text_color="#8b949e"
-        ).pack(anchor="w", padx=15, pady=(10, 5))
+            frame, text="🎯  Nhận Diện Mới Nhất",
+            font=ctk.CTkFont(size=13, weight="bold"), text_color=C["muted"]
+        ).pack(anchor="w", padx=14, pady=(10, 4))
 
-        self.lbl_kyHieu = ctk.CTkLabel(
-            frame, text="---", font=ctk.CTkFont(family="Segoe UI Emoji", size=32, weight="bold"), text_color="#00ffff"
+        self.lbl_result = ctk.CTkLabel(
+            frame, text="— Chưa nhận diện —",
+            font=ctk.CTkFont("Segoe UI Emoji", 26, "bold"),
+            text_color=C["cyan"]
         )
-        self.lbl_kyHieu.pack(pady=(5, 0))
+        self.lbl_result.pack(pady=(0, 2))
 
-        self.lbl_tincay = ctk.CTkLabel(
-            frame, text="Độ tin cậy: —", font=ctk.CTkFont(size=13), text_color="#8b949e"
+        self.lbl_confidence_text = ctk.CTkLabel(
+            frame, text="Độ tin cậy : —",
+            font=ctk.CTkFont(size=12), text_color=C["muted"]
         )
-        self.lbl_tincay.pack(pady=2)
+        self.lbl_confidence_text.pack()
 
-        self.progress_tincay = ctk.CTkProgressBar(
-            frame, mode="determinate", progress_color="#00ffff", fg_color="#21262d", height=12
+        self.progress_conf = ctk.CTkProgressBar(
+            frame, mode="determinate",
+            progress_color=C["cyan"], fg_color=C["border"], height=14
         )
-        self.progress_tincay.set(0)
-        self.progress_tincay.pack(fill="x", padx=15, pady=(3, 8))
+        self.progress_conf.set(0)
+        self.progress_conf.pack(fill="x", padx=14, pady=(4, 4))
+
+        # Top 3
+        ctk.CTkLabel(
+            frame, text="Top 3 khả năng:",
+            font=ctk.CTkFont(size=11, weight="bold"), text_color=C["border"]
+        ).pack(anchor="w", padx=14)
 
         self.lbl_top3 = ctk.CTkLabel(
-            frame, text="—\n—\n—", font=ctk.CTkFont(size=12), text_color="#8b949e", justify="left"
+            frame, text="—\n—\n—",
+            font=ctk.CTkFont("Consolas", 11),
+            text_color=C["muted"], justify="left"
         )
         self.lbl_top3.pack(anchor="w", padx=20, pady=(2, 10))
 
-    def _tao_panel_caidat(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color="#161b22", corner_radius=12)
-        frame.pack(fill="x", pady=(0, 8))
+    # ─── PANEL THỐNG KÊ PHIÊN ─────────────────────────────
+    def _build_stats_panel(self, parent):
+        frame = ctk.CTkFrame(parent, fg_color=C["panel"], corner_radius=14)
+        frame.pack(fill="x", pady=(0, 7))
 
         ctk.CTkLabel(
-            frame, text="⚙️  Bảng Điều Khiển", font=ctk.CTkFont(size=14, weight="bold"), text_color="#8b949e"
-        ).pack(anchor="w", padx=15, pady=(10, 5))
+            frame, text="📊  Thống Kê Phiên",
+            font=ctk.CTkFont(size=13, weight="bold"), text_color=C["muted"]
+        ).pack(anchor="w", padx=14, pady=(10, 6))
 
-        self.entry_api_url = ctk.CTkEntry(
-            frame, placeholder_text=API_URL_DEFAULT, font=ctk.CTkFont(size=12),
-            fg_color="#21262d", border_color="#30363d", text_color="#e6edf3"
+        stats_grid = ctk.CTkFrame(frame, fg_color="transparent")
+        stats_grid.pack(fill="x", padx=14, pady=(0, 10))
+
+        def _stat_box(parent, label, init_val, row, col, color):
+            box = ctk.CTkFrame(parent, fg_color=C["border"], corner_radius=8)
+            box.grid(row=row, column=col, padx=3, pady=3, sticky="ew")
+            parent.columnconfigure(col, weight=1)
+            ctk.CTkLabel(box, text=label, font=ctk.CTkFont(size=9),
+                         text_color=C["muted"]).pack(pady=(5, 0))
+            lbl = ctk.CTkLabel(box, text=init_val,
+                               font=ctk.CTkFont(size=16, weight="bold"),
+                               text_color=color)
+            lbl.pack(pady=(0, 5))
+            return lbl
+
+        self.lbl_thoi_gian  = _stat_box(stats_grid, "THỜI GIAN", "00:00:00", 0, 0, C["cyan"])
+        self.lbl_so_tu      = _stat_box(stats_grid, "SỐ TỪ",    "0",        0, 1, C["green"])
+        self.lbl_tb_tc      = _stat_box(stats_grid, "ĐỘ TIN CẬY TB", "—%", 0, 2, C["orange"])
+
+    # ─── PANEL ĐIỀU KHIỂN ─────────────────────────────────
+    def _build_controls_panel(self, parent):
+        frame = ctk.CTkFrame(parent, fg_color=C["panel"], corner_radius=14)
+        frame.pack(fill="x", pady=(0, 7))
+
+        ctk.CTkLabel(
+            frame, text="⚙️  Điều Khiển",
+            font=ctk.CTkFont(size=13, weight="bold"), text_color=C["muted"]
+        ).pack(anchor="w", padx=14, pady=(10, 4))
+
+        # URL API
+        self.entry_url = ctk.CTkEntry(
+            frame, placeholder_text=API_URL_DEFAULT,
+            font=ctk.CTkFont(size=12),
+            fg_color=C["border"], border_color="#30363d", text_color=C["text"]
         )
-        self.entry_api_url.insert(0, API_URL_DEFAULT)
-        self.entry_api_url.pack(fill="x", padx=15, pady=(2, 8))
+        self.entry_url.insert(0, API_URL_DEFAULT)
+        self.entry_url.pack(fill="x", padx=14, pady=(0, 6))
 
-        self.slider_nguong = ctk.CTkSlider(
+        # Slider ngưỡng + label
+        sl_row = ctk.CTkFrame(frame, fg_color="transparent")
+        sl_row.pack(fill="x", padx=14)
+        ctk.CTkLabel(sl_row, text="Ngưỡng:", font=ctk.CTkFont(size=11),
+                     text_color=C["muted"]).pack(side="left")
+        self.lbl_threshold = ctk.CTkLabel(
+            sl_row, text="60%", font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=C["cyan"]
+        )
+        self.lbl_threshold.pack(side="right")
+
+        self.slider_thresh = ctk.CTkSlider(
             frame, from_=30, to=95, number_of_steps=13,
-            progress_color="#00ffff", button_color="#ffffff", button_hover_color="#00cccc"
+            command=lambda v: self.lbl_threshold.configure(text=f"{int(v)}%"),
+            progress_color=C["cyan"], button_color="#ffffff"
         )
-        self.slider_nguong.set(60) # Ngưỡng văng câu dễ hơn
-        self.slider_nguong.pack(fill="x", padx=15, pady=(0, 15))
+        self.slider_thresh.set(60)
+        self.slider_thresh.pack(fill="x", padx=14, pady=(2, 8))
 
-        btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=15, pady=(0, 12))
+        # Nút Bắt Đầu / Dừng / Xuất log
+        btn_row = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_row.pack(fill="x", padx=14, pady=(0, 8))
 
-        self.btn_batdau = ctk.CTkButton(
-            btn_frame, text="▶  BẮT ĐẦU", font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color="#238636", hover_color="#2ea043", height=40, command=self._bat_dau
+        self.btn_start = ctk.CTkButton(
+            btn_row, text="▶  BẮT ĐẦU", height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=C["green"], hover_color="#2ea043",
+            command=self._start
         )
-        self.btn_batdau.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.btn_start.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
-        self.btn_dung = ctk.CTkButton(
-            btn_frame, text="⏹  DỪNG", font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color="#da3633", hover_color="#f85149", height=40, state="disabled", command=self._dung
+        self.btn_stop = ctk.CTkButton(
+            btn_row, text="⏹  DỪNG", height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color=C["red"], hover_color="#f85149",
+            state="disabled", command=self._stop
         )
-        self.btn_dung.pack(side="right", fill="x", expand=True, padx=(4, 0))
+        self.btn_stop.pack(side="right", fill="x", expand=True, padx=(4, 0))
 
-    def _tao_panel_lichsu(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color="#161b22", corner_radius=12)
+        # Nút xuất log
+        ctk.CTkButton(
+            frame, text="💾  Xuất Log ra File .txt",
+            font=ctk.CTkFont(size=11), height=30,
+            fg_color=C["border"], hover_color="#30363d",
+            text_color=C["muted"],
+            command=self._export_log
+        ).pack(fill="x", padx=14, pady=(0, 10))
+
+    # ─── PANEL TOP TỪ ─────────────────────────────────────
+    def _build_topwords_panel(self, parent):
+        frame = ctk.CTkFrame(parent, fg_color=C["panel"], corner_radius=14)
         frame.pack(fill="both", expand=True)
 
+        top_row = ctk.CTkFrame(frame, fg_color="transparent")
+        top_row.pack(fill="x", padx=14, pady=(10, 4))
+
         ctk.CTkLabel(
-            frame, text="📜  Lịch Sử (Logs)", font=ctk.CTkFont(size=14, weight="bold"), text_color="#8b949e"
-        ).pack(anchor="w", padx=15, pady=(10, 5))
+            top_row, text="🏆  Từ Nhận Diện Nhiều Nhất",
+            font=ctk.CTkFont(size=13, weight="bold"), text_color=C["muted"]
+        ).pack(side="left")
 
-        self.txtbox_lichsu = ctk.CTkTextbox(
-            frame, font=ctk.CTkFont(family="Consolas", size=11),
-            fg_color="#0d1117", text_color="#8b949e", border_width=0, state="disabled"
+        ctk.CTkButton(
+            top_row, text="Reset", width=48, height=22,
+            font=ctk.CTkFont(size=10), fg_color="transparent",
+            hover_color=C["border"], text_color=C["muted"],
+            command=self._reset_stats
+        ).pack(side="right")
+
+        self.txtbox_log = ctk.CTkTextbox(
+            frame, font=ctk.CTkFont("Consolas", 11),
+            fg_color="#0a0e14", text_color=C["muted"],
+            border_width=0, state="disabled"
         )
-        self.txtbox_lichsu.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.txtbox_log.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-    def _tao_footer(self):
-        footer = ctk.CTkFrame(self, fg_color="#161b22", corner_radius=0, height=32)
-        footer.pack(fill="x", side="bottom")
-        footer.pack_propagate(False)
+    # ─── FOOTER ───────────────────────────────────────────
+    def _build_footer(self):
+        ftr = ctk.CTkFrame(self, fg_color=C["header"], corner_radius=0, height=28)
+        ftr.pack(fill="x", side="bottom")
+        ftr.pack_propagate(False)
 
-        self.lbl_fps = ctk.CTkLabel(footer, text="FPS: —", font=ctk.CTkFont(size=11), text_color="#6e7681")
-        self.lbl_fps.pack(side="left", padx=15)
+        self.lbl_fps = ctk.CTkLabel(
+            ftr, text="FPS: —", font=ctk.CTkFont(size=10), text_color=C["border"]
+        )
+        self.lbl_fps.pack(side="left", padx=14)
 
-        self.lbl_so_nhan_dien = ctk.CTkLabel(footer, text="Latency: —", font=ctk.CTkFont(size=11), text_color="#6e7681")
-        self.lbl_so_nhan_dien.pack(side="left", padx=15)
+        self.lbl_latency = ctk.CTkLabel(
+            ftr, text="Latency: —", font=ctk.CTkFont(size=10), text_color=C["border"]
+        )
+        self.lbl_latency.pack(side="left", padx=8)
 
-    # ========================================================
-    # LOGIC GHÉP CÂU + ĐỌC VĂN BẢN
-    # ========================================================
-    def _xoa_cau(self):
+        ctk.CTkLabel(
+            ftr, text="MediaPipe · LSTM · FastAPI · TTS · CustomTkinter",
+            font=ctk.CTkFont(size=10), text_color=C["border"]
+        ).pack(side="right", padx=14)
+
+    # ====================================================
+    # LOGIC GHÉP CÂU
+    # ====================================================
+    def _clear_sentence(self):
         self.cau_hien_tai.clear()
         self.tu_cuoi_cung = None
-        self.lbl_cau_hien_tai.configure(text="...")
-        self.audio_queue.put("Đã xóa")
+        self.lbl_sentence.configure(text="...")
 
-    def _doc_toan_bo_cau(self):
+    def _undo_last_word(self):
+        if self.cau_hien_tai:
+            removed = self.cau_hien_tai.pop()
+            self._refresh_sentence_label()
+            self._log(f"↩ Đã xóa từ: {LABEL_DISPLAY.get(removed, removed)}")
+
+    def _read_sentence(self):
         if not self.cau_hien_tai:
+            self.audio_queue.put("Câu rỗng.")
             return
-        
-        # Lọc sạch text bỏ icon emoji (VD "👋 Xin Chào" -> "Xin Chào")
-        doan_mieu_ta = []
+        parts = []
         for tu in self.cau_hien_tai:
-            chuoi_hien_thi = LABEL_DISPLAY.get(tu, tu)
-            chuoi_sach = re.sub(r'[^\w\s]', '', chuoi_hien_thi).strip()
-            doan_mieu_ta.append(chuoi_sach)
-            
-        cau_vong_ngoai = " ".join(doan_mieu_ta)
-        self.audio_queue.put(cau_vong_ngoai)
+            raw = LABEL_DISPLAY.get(tu, tu)
+            parts.append(re.sub(r'[^\w\s]', '', raw).strip())
+        self.audio_queue.put(" ".join(parts))
 
-    def _cap_nhat_giao_dien_cau(self):
+    def _refresh_sentence_label(self):
         if not self.cau_hien_tai:
-            self.lbl_cau_hien_tai.configure(text="...")
+            self.lbl_sentence.configure(text="...")
+        else:
+            self.lbl_sentence.configure(
+                text=" ".join([LABEL_DISPLAY.get(t, t) for t in self.cau_hien_tai])
+            )
+
+    # ====================================================
+    # XUẤT LOG
+    # ====================================================
+    def _export_log(self):
+        path = os.path.join(
+            os.path.dirname(__file__),
+            f"lich_su_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+        )
+        try:
+            self.txtbox_log.configure(state="normal")
+            content = self.txtbox_log.get("1.0", "end")
+            self.txtbox_log.configure(state="disabled")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("=== LỊCH SỬ PHIÊN NHẬN DIỆN ===\n")
+                f.write(f"Xuất lúc: {datetime.datetime.now()}\n")
+                f.write(f"Câu ghép: {' '.join(self.cau_hien_tai)}\n")
+                f.write("="*40 + "\n")
+                f.write(content)
+            self._log(f"💾 Đã xuất log → {os.path.basename(path)}")
+        except Exception as e:
+            self._log(f"[LỖI] Xuất log thất bại: {e}")
+
+    def _reset_stats(self):
+        self.so_tu_nhan_dien = 0
+        self.tong_do_tincay  = 0.0
+        self.dem_tu.clear()
+        self.lbl_so_tu.configure(text="0")
+        self.lbl_tb_tc.configure(text="—%")
+        self.txtbox_log.configure(state="normal")
+        self.txtbox_log.delete("1.0", "end")
+        self.txtbox_log.configure(state="disabled")
+
+    # ====================================================
+    # WEBCAM
+    # ====================================================
+    def _start(self):
+        if self.dang_chay:
             return
-        cau_text = " ".join([LABEL_DISPLAY.get(tu, tu) for tu in self.cau_hien_tai])
-        self.lbl_cau_hien_tai.configure(text=cau_text)
-
-    # ========================================================
-    # LOGIC WEBCAM & API
-    # ========================================================
-    def _bat_dau(self):
-        if self.dang_chay: return
-
-        # Đợi luồng cũ tắt hẳn để Camera thực sự được nhả
+        # Đợi thread cũ kết thúc trước
         if self.luong_webcam and self.luong_webcam.is_alive():
-            self.update() # Mượt UI
+            self.update()
             self.luong_webcam.join(timeout=2.0)
 
-        self.dang_chay = True
-        self.tong_frame = 0
-        self.thoi_diem_bd = time.time()
+        self.dang_chay     = True
+        self.tong_frame    = 0
+        self.thoi_diem_bd  = time.time()
         self.buffer_seq.clear()
 
-        self.btn_batdau.configure(state="disabled")
-        self.btn_dung.configure(state="normal")
-        self.lbl_trang_thai_header.configure(text="● Đang Quét (Neon Active)", text_color="#ff00ff")
-        
-        self.luong_webcam = threading.Thread(target=self._vong_lap_webcam, daemon=True)
+        self.btn_start.configure(state="disabled")
+        self.btn_stop.configure(state="normal")
+        self.lbl_status_hdr.configure(text="⬤  Đang chạy", text_color=C["magenta"])
+
+        self.luong_webcam = threading.Thread(target=self._webcam_loop, daemon=True)
         self.luong_webcam.start()
 
-    def _dung(self):
+    def _stop(self):
         self.dang_chay = False
-        # Chuyển việc giải phóng camera (release) vào cuối thread `_vong_lap_webcam`
-        # Tránh lỗi đụng độ bộ nhớ khi đóng camera lúc thread con đang đọc frame
-        self.btn_batdau.configure(state="normal")
-        self.btn_dung.configure(state="disabled")
-        self.lbl_video.configure(image=None, text="Đã dừng AI.")
-        self.lbl_trang_thai_header.configure(text="● Đã dừng", text_color="#8b949e")
+        self.btn_start.configure(state="normal")
+        self.btn_stop.configure(state="disabled")
+        self.lbl_trang_thai = self.lbl_status_hdr.configure(
+            text="⬤  Đã dừng", text_color=C["muted"]
+        )
+        self.lbl_video.configure(image=None,
+                                 text="Đã dừng  ·  Nhấn ▶ để tiếp tục")
+        self.lbl_hand_detect.configure(text="✋ Không có tay", text_color=C["border"])
 
-    def _dong_ung_dung(self):
+    def _on_close(self):
         self.dang_chay = False
-        self.audio_queue.put(None) # Tat TTS
+        self.audio_queue.put(None)
         if self.cap and self.cap.isOpened():
             self.cap.release()
         self.destroy()
 
-    def _vong_lap_webcam(self):
-        # Mở Camera bên trong luồng để không làm đơ giao diện
+    # ====================================================
+    # VÒNG LẶP WEBCAM (THREAD RIÊNG)
+    # ====================================================
+    def _webcam_loop(self):
         self.cap = cv2.VideoCapture(WEBCAM_INDEX, cv2.CAP_DSHOW)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, WEBCAM_W)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH,  WEBCAM_W)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, WEBCAM_H)
         self.cap.set(cv2.CAP_PROP_FPS, 30)
 
         if not self.cap.isOpened():
-            self.after(0, lambda: self._ghi_lichsu("[LỖI] Không mở được camera. Rút dây cắm lại xem sao!"))
-            self.after(0, self._dung)
+            self.after(0, lambda: self._log("[LỖI] Không mở được Camera!"))
+            self.after(0, self._stop)
             return
 
-        # MÀU NEON CHUẨN CYBERPUNK (BGR format in OpenCV)
-        # Các điểm khớp Bàn tay (Cyan bàng bạc)
-        landmark_style = mp_draw.DrawingSpec(color=(255, 255, 0), thickness=3, circle_radius=4)
-        # Đường nối xương (Hồng rực rỡ)
-        connection_style = mp_draw.DrawingSpec(color=(255, 0, 255), thickness=3)
+        # Neon style
+        lm_style = mp_draw.DrawingSpec(color=(255, 255, 0), thickness=3, circle_radius=4)
+        cn_style = mp_draw.DrawingSpec(color=(255, 0, 255), thickness=2)
 
         while self.dang_chay:
             ret, frame = self.cap.read()
-            if not ret: break
+            if not ret:
+                break
 
             frame = cv2.flip(frame, 1)
             self.tong_frame += 1
 
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_rgb.flags.writeable = False
-            ket_qua_mp = self.hands_detector.process(frame_rgb)
-            frame_rgb.flags.writeable = True
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb.flags.writeable = False
+            mp_res = self.hands_detector.process(rgb)
+            rgb.flags.writeable = True
 
+            # Trích xuất vector đặc trưng
             vector = np.zeros(NUM_FEATURES, dtype=np.float32)
-            if ket_qua_mp.multi_hand_landmarks:
-                for i, hand_lm in enumerate(ket_qua_mp.multi_hand_landmarks):
-                    if i >= 2: break
-                    bat_dau = i * 63
+            co_tay_frame = False
+            if mp_res.multi_hand_landmarks:
+                co_tay_frame = True
+                for i, hand_lm in enumerate(mp_res.multi_hand_landmarks):
+                    if i >= 2:
+                        break
+                    start = i * 63
                     for j, lm in enumerate(hand_lm.landmark):
-                        idx = bat_dau + j * 3
+                        idx = start + j * 3
                         vector[idx], vector[idx+1], vector[idx+2] = lm.x, lm.y, lm.z
+                    mp_draw.draw_landmarks(frame, hand_lm,
+                                          mp_hands.HAND_CONNECTIONS,
+                                          lm_style, cn_style)
 
-                    # VẼ KHUNG XƯƠNG NEON LÊN FRAME
-                    mp_draw.draw_landmarks(
-                        frame, hand_lm, mp_hands.HAND_CONNECTIONS,
-                        landmark_style, connection_style
-                    )
+            # Cập nhật chỉ thị tay (gửi về UI thread)
+            self.after(0, self._update_hand_indicator, co_tay_frame)
 
             with self._lock:
                 self.buffer_seq.append(vector)
-                so_frame_buf = len(self.buffer_seq)
+                buf_len = len(self.buffer_seq)
 
-            # Xử lý hiển thị lớp mờ + Text trên frame
-            if self.ket_qua_ht != "---" and self.tincay_ht >= (self.slider_nguong.get()/100.0):
-                txt = LABEL_DISPLAY.get(self.ket_qua_ht, self.ket_qua_ht)
-                overlay = frame.copy()
-                cv2.rectangle(overlay, (0, WEBCAM_H - 80), (WEBCAM_W, WEBCAM_H), (0, 0, 0), -1)
-                cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-                cv2.putText(frame, f"{txt} ({self.tincay_ht*100:.0f}%)", (15, WEBCAM_H - 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 0), 2, cv2.LINE_AA)
+            # Overlay chữ kết quả lên frame
+            if self.ket_qua_ht != "---" and self.tincay_ht >= (self.slider_thresh.get() / 100):
+                ov = frame.copy()
+                cv2.rectangle(ov, (0, WEBCAM_H - 80), (WEBCAM_W, WEBCAM_H),
+                              (0, 0, 0), -1)
+                cv2.addWeighted(ov, 0.65, frame, 0.35, 0, frame)
+                cv2.putText(
+                    frame,
+                    f"{LABEL_DISPLAY.get(self.ket_qua_ht, self.ket_qua_ht)}  "
+                    f"({self.tincay_ht * 100:.0f}%)",
+                    (14, WEBCAM_H - 22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 0), 2, cv2.LINE_AA
+                )
 
-            if so_frame_buf == SEQUENCE_LENGTH:
+            # Khi buffer đầy → gọi API
+            if buf_len == SEQUENCE_LENGTH:
                 with self._lock:
                     seq_copy = list(self.buffer_seq)
                     for _ in range(SEQUENCE_LENGTH // 2):
                         self.buffer_seq.popleft()
+                threading.Thread(
+                    target=self._call_api, args=(seq_copy,), daemon=True
+                ).start()
 
-                threading.Thread(target=self._goi_api_va_cap_nhat, args=(seq_copy,), daemon=True).start()
-
-            # Render
-            fra_rgb_disp = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            img = ctk.CTkImage(Image.fromarray(fra_rgb_disp), size=(WEBCAM_W, WEBCAM_H))
+            # Cập nhật UI
+            img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            ctk_img = ctk.CTkImage(Image.fromarray(img_rgb), size=(WEBCAM_W, WEBCAM_H))
             fps = self.tong_frame / (time.time() - self.thoi_diem_bd + 0.001)
+            self.after(0, self._ui_update_video, ctk_img, buf_len / SEQUENCE_LENGTH, fps)
 
-            self.after(0, self._cap_nhat_ui_chinh, img, so_frame_buf/SEQUENCE_LENGTH, fps)
-
-        # KHI THOÁT VÒNG LẶP DO BẤM STOP -> GIẢI PHÓNG CAMERA AN TOÀN NHẤT
         if self.cap and self.cap.isOpened():
             self.cap.release()
 
-    def _goi_api_va_cap_nhat(self, sequence):
-        url = self.entry_api_url.get().strip()
-        nguong = self.slider_nguong.get() / 100.0
-
+    # ====================================================
+    # GỌI API
+    # ====================================================
+    def _call_api(self, sequence):
+        url    = self.entry_url.get().strip()
+        nguong = self.slider_thresh.get() / 100.0
         try:
             payload = {"sequence": [v.tolist() for v in sequence]}
             resp = requests.post(f"{url}/predict", json=payload, timeout=3)
-            
             if resp.status_code == 200:
-                data = resp.json()
+                data    = resp.json()
                 ky_hieu = data.get("ky_hieu", "?")
                 tincay  = data.get("do_tin_cay", 0.0)
                 top3    = data.get("top3", [])
                 ms      = data.get("thoi_gian_xu_ly_ms", 0)
 
-                self.after(0, lambda: self.lbl_so_nhan_dien.configure(text=f"Latency: {ms:.0f}ms"))
+                self.after(0, self.lbl_latency.configure,
+                           {"text": f"Latency: {ms:.0f}ms"})
 
-                if tincay >= nguong:
+                if tincay >= nguong and ky_hieu not in ("None", "?"):
                     self.ket_qua_ht = ky_hieu
                     self.tincay_ht  = tincay
-                    
-                    # LOGIC GHÉP CÂU THÔNG MINH (Debounce)
-                    hien_tai = time.time()
-                    if self.tu_cuoi_cung != ky_hieu or (hien_tai - self.thoi_gian_nhan_tu_cuoi > 2.0):
-                        if ky_hieu != "None":  # Đảm bảo không bắt nhầm frame trống
-                            self.cau_hien_tai.append(ky_hieu)
-                            self.tu_cuoi_cung = ky_hieu
-                            self.thoi_gian_nhan_tu_cuoi = hien_tai
-                            
-                            # Cú pháp Regex làm mượt text trước khi đọc tiếng Việt
-                            hien_thi = LABEL_DISPLAY.get(ky_hieu, ky_hieu)
-                            txt_doc = re.sub(r'[^\w\s]', '', hien_thi).strip()
-                            self.audio_queue.put(txt_doc)
-                            
-                            self.after(0, self._cap_nhat_giao_dien_cau)
 
-                    self.after(0, self._cap_nhat_bang_ket_qua, ky_hieu, tincay, top3)
+                    # Ghép câu (debounce 2 giây)
+                    now = time.time()
+                    if (self.tu_cuoi_cung != ky_hieu or
+                            now - self.thoi_gian_nhan_tu_cuoi > 2.0):
+                        self.cau_hien_tai.append(ky_hieu)
+                        self.tu_cuoi_cung = ky_hieu
+                        self.thoi_gian_nhan_tu_cuoi = now
 
-        except requests.exceptions.Timeout: pass
-        except requests.exceptions.ConnectionError: pass
+                        # TTS tự động đọc từng từ
+                        raw = LABEL_DISPLAY.get(ky_hieu, ky_hieu)
+                        self.audio_queue.put(re.sub(r'[^\w\s]', '', raw).strip())
 
-    # ========================================================
-    # CÁC HÀM TIỆN ÍCH UPDATE GIAO DIỆN KHÁC
-    # ========================================================
-    def _cap_nhat_ui_chinh(self, img, buff_pct, fps):
+                        # Cập nhật thống kê
+                        self.so_tu_nhan_dien += 1
+                        self.tong_do_tincay  += tincay
+                        self.dem_tu[ky_hieu] += 1
+
+                        self.after(0, self._ui_update_stats)
+                        self.after(0, self._refresh_sentence_label)
+
+                    self.after(0, self._ui_update_result, ky_hieu, tincay, top3)
+
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError):
+            pass
+        except Exception as e:
+            self.after(0, self._log, f"[LỖI API] {e}")
+
+    # ====================================================
+    # CẬP NHẬT UI
+    # ====================================================
+    def _update_hand_indicator(self, co_tay: bool):
+        if co_tay:
+            self.lbl_hand_detect.configure(
+                text="✋ ĐANG PHÁT HIỆN TAY", text_color=C["cyan"]
+            )
+        else:
+            self.lbl_hand_detect.configure(
+                text="✋ Không có tay", text_color=C["border"]
+            )
+
+    def _ui_update_video(self, img, buf_pct, fps):
         self.lbl_video.configure(image=img, text="")
-        self.progress_buffer.set(buff_pct)
+        self.progress_buf.set(buf_pct)
+        self.lbl_buf_val.configure(text=f"{int(buf_pct * SEQUENCE_LENGTH)}/{SEQUENCE_LENGTH}")
         self.lbl_fps.configure(text=f"FPS: {fps:.1f}")
 
-    def _cap_nhat_bang_ket_qua(self, ky_hieu, tincay, top3):
-        self.lbl_kyHieu.configure(text=LABEL_DISPLAY.get(ky_hieu, ky_hieu))
-        self.lbl_tincay.configure(text=f"Độ tin cậy: {tincay*100:.1f}%")
-        self.progress_tincay.set(tincay)
+    def _ui_update_result(self, ky_hieu, tincay, top3):
+        ten = LABEL_DISPLAY.get(ky_hieu, ky_hieu)
+        self.lbl_result.configure(text=ten)
+        self.lbl_confidence_text.configure(text=f"Độ tin cậy : {tincay*100:.1f}%")
+        self.progress_conf.set(tincay)
 
-        mau = "#00ffff" if tincay >= 0.8 else ("#ff00ff" if tincay >= 0.6 else "#da3633")
-        self.progress_tincay.configure(progress_color=mau)
-        self.lbl_kyHieu.configure(text_color=mau)
+        # Màu gradient theo confidence
+        if tincay >= 0.85:
+            mau = C["green"]
+        elif tincay >= 0.65:
+            mau = C["cyan"]
+        elif tincay >= 0.50:
+            mau = C["orange"]
+        else:
+            mau = C["red"]
+        self.progress_conf.configure(progress_color=mau)
+        self.lbl_result.configure(text_color=mau)
 
-        t3_txt = "".join([f"› {LABEL_DISPLAY.get(x['nhan'], x['nhan'])}  {x['xac_suat']*100:.1f}%\n" for x in top3[:3]])
-        self.lbl_top3.configure(text=t3_txt.strip())
-        self._ghi_lichsu(f"• Nhận diện: {ky_hieu} ({tincay*100:.1f}%)")
+        # Top 3
+        icons = ["🥇", "🥈", "🥉"]
+        lines = []
+        for i, item in enumerate(top3[:3]):
+            n = LABEL_DISPLAY.get(item.get("nhan", ""), item.get("nhan", ""))
+            p = item.get("xac_suat", 0) * 100
+            lines.append(f"{icons[i]} {n:<20} {p:.1f}%")
+        self.lbl_top3.configure(text="\n".join(lines) if lines else "—\n—\n—")
 
-    def _ghi_lichsu(self, dong):
-        self.txtbox_lichsu.configure(state="normal")
-        self.txtbox_lichsu.insert("end", dong + "\n")
-        self.txtbox_lichsu.see("end")
-        self.txtbox_lichsu.configure(state="disabled")
+        self._log(f"• {ky_hieu} — {tincay*100:.1f}%")
 
+    def _ui_update_stats(self):
+        self.lbl_so_tu.configure(text=str(self.so_tu_nhan_dien))
+        if self.so_tu_nhan_dien > 0:
+            tb = (self.tong_do_tincay / self.so_tu_nhan_dien) * 100
+            self.lbl_tb_tc.configure(text=f"{tb:.0f}%")
+
+        # Top từ
+        top5 = self.dem_tu.most_common(5)
+        if top5:
+            self.txtbox_log.configure(state="normal")
+            self.txtbox_log.delete("1.0", "end")
+            self.txtbox_log.insert("end", "─── Top Từ ───\n")
+            for tu, count in top5:
+                bar = "█" * count
+                self.txtbox_log.insert(
+                    "end", f"  {LABEL_DISPLAY.get(tu, tu):<20} {count}x  {bar}\n"
+                )
+            self.txtbox_log.insert("end", "\n─── Câu đã ghép ───\n")
+            self.txtbox_log.insert(
+                "end",
+                " ".join([LABEL_DISPLAY.get(t, t) for t in self.cau_hien_tai]) or "..."
+            )
+            self.txtbox_log.configure(state="disabled")
+
+    def _log(self, text: str):
+        # Chỉ log thông báo hệ thống ra textbox khi không có "• " (từ nhận diện)
+        if not text.startswith("•"):
+            self.txtbox_log.configure(state="normal")
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            self.txtbox_log.insert("end", f"[{ts}] {text}\n")
+            self.txtbox_log.see("end")
+            self.txtbox_log.configure(state="disabled")
+
+
+# ============================================================
 if __name__ == "__main__":
     app = SignLanguageApp()
     app.mainloop()
