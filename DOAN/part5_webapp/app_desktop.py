@@ -629,6 +629,10 @@ class SignLanguageApp(ctk.CTk):
             frame = cv2.flip(frame, 1)
             self.tong_frame += 1
 
+            # XỬ LÝ FLIP ĐÚNG CÁCH:
+            # - Thu thập dữ liệu huấn luyện: frame đã flip → landmarks từ frame flip
+            # - App live: cần flip NGƯỢC lại để landmarks khớp với dữ liệu train
+            # → Trích xuất landmarks từ frame ĐÃ flip (giống lúc thu thập)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             rgb.flags.writeable = False
             mp_res = self.hands_detector.process(rgb)
@@ -652,6 +656,7 @@ class SignLanguageApp(ctk.CTk):
 
             # Cập nhật chỉ thị tay (gửi về UI thread)
             self.after(0, self._update_hand_indicator, co_tay_frame)
+
 
             with self._lock:
                 self.buffer_seq.append(vector)
