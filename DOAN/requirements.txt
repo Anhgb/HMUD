@@ -14,3 +14,6 @@ customtkinter>=5.2.0
 requests>=2.31.0
 joblib>=1.3.0
 tqdm>=4.66.0
+pyttsx3>=2.90
+comtypes
+pypiwin32
