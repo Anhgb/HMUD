@@ -110,6 +110,11 @@ class SignLanguageApp(ctk.CTk):
     # ========================================================
     def _xu_ly_am_thanh(self):
         """Khởi động bộ máy phát âm thanh trong background thread."""
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except:
+            pass
         engine = pyttsx3.init()
         engine.setProperty('rate', 140)  # Tốc độ đọc tự nhiên hơn
         while True:
@@ -345,7 +350,7 @@ class SignLanguageApp(ctk.CTk):
     # ========================================================
     def _bat_dau(self):
         if self.dang_chay: return
-        self.cap = cv2.VideoCapture(WEBCAM_INDEX)
+        self.cap = cv2.VideoCapture(WEBCAM_INDEX, cv2.CAP_DSHOW) # Dùng DSHOW giúp khởi động camera Windows ổn định hơn
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, WEBCAM_W)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, WEBCAM_H)
         self.cap.set(cv2.CAP_PROP_FPS, 30)
@@ -368,8 +373,8 @@ class SignLanguageApp(ctk.CTk):
 
     def _dung(self):
         self.dang_chay = False
-        if self.cap and self.cap.isOpened():
-            self.cap.release()
+        # Chuyển việc giải phóng camera (release) vào cuối thread `_vong_lap_webcam`
+        # Tránh lỗi đụng độ bộ nhớ khi đóng camera lúc thread con đang đọc frame
         self.btn_batdau.configure(state="normal")
         self.btn_dung.configure(state="disabled")
         self.lbl_video.configure(image=None, text="Đã dừng AI.")
@@ -443,6 +448,10 @@ class SignLanguageApp(ctk.CTk):
             fps = self.tong_frame / (time.time() - self.thoi_diem_bd + 0.001)
 
             self.after(0, self._cap_nhat_ui_chinh, img, so_frame_buf/SEQUENCE_LENGTH, fps)
+
+        # KHI THOÁT VÒNG LẶP DO BẤM STOP -> GIẢI PHÓNG CAMERA AN TOÀN NHẤT
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
 
     def _goi_api_va_cap_nhat(self, sequence):
         url = self.entry_api_url.get().strip()
